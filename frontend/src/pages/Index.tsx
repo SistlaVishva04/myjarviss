@@ -15,6 +15,7 @@ import useSpeechRecognition from "@/hooks/useSpeechRecognition";
 import useTextToSpeech from "@/hooks/useTextToSpeech";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
+import { isMobileBrowser } from "@/lib/isMobile";
 
 // Generate title from first message
 const generateTitle = (messages: Message[]): string => {
@@ -28,6 +29,7 @@ const generateTitle = (messages: Message[]): string => {
 const Index = () => {
   const navigate = useNavigate();
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+  const isMobile = isMobileBrowser();
   const {
     user,
     loading: authLoading,
@@ -41,6 +43,8 @@ const Index = () => {
   const [isCreditsOpen, setIsCreditsOpen] = useState(false);
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
   const isSpacePressed = useRef(false);
+  const pendingProcessRef = useRef(false);
+  const isHoldToSpeakActiveRef = useRef(false);
 
   // Get current conversation messages
   const currentConversation = conversations.find(c => c.id === currentConversationId);
@@ -227,8 +231,39 @@ const Index = () => {
     [user, currentConversationId, conversations]
   );
 
-  // Track pending transcript to process after listening stops
-  const pendingProcessRef = useRef(false);
+  const handleHoldToSpeakStart = useCallback(
+    (e: React.TouchEvent | React.MouseEvent) => {
+      if (!isMobile) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (isHoldToSpeakActiveRef.current) return;
+      isHoldToSpeakActiveRef.current = true;
+
+      if (speechSupported && !isProcessing && !isSpeaking) {
+        startListening();
+        toast.info("Listening...", { duration: 2000 });
+      }
+    },
+    [isMobile, speechSupported, isProcessing, isSpeaking, startListening]
+  );
+
+  const handleHoldToSpeakEnd = useCallback(
+    (e: React.TouchEvent | React.MouseEvent) => {
+      if (!isMobile) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (!isHoldToSpeakActiveRef.current) return;
+      isHoldToSpeakActiveRef.current = false;
+
+      if (isListening) {
+        pendingProcessRef.current = true;
+        stopListening();
+      }
+    },
+    [isMobile, isListening, stopListening]
+  );
   const handleUserInput = useCallback(async (input: string) => {
     if (!input.trim()) return;
 
@@ -539,7 +574,22 @@ const Index = () => {
                 JUST A RATHER VERY INTELLIGENT SYSTEM
               </p>
             </motion.div>
-            <JarvisOrb state={orbState} onClick={handleOrbClick} />
+            <JarvisOrb state={orbState} onClick={isMobile ? undefined : handleOrbClick} />
+
+            {isMobile && (
+              <button
+                type="button"
+                onTouchStart={handleHoldToSpeakStart}
+                onTouchEnd={handleHoldToSpeakEnd}
+                onTouchCancel={handleHoldToSpeakEnd}
+                onMouseDown={handleHoldToSpeakStart}
+                onMouseUp={handleHoldToSpeakEnd}
+                onMouseLeave={handleHoldToSpeakEnd}
+                className="mt-4 px-6 py-3 rounded-full bg-primary text-black font-semibold shadow-lg active:scale-95 transition select-none"
+              >
+                HOLD TO SPEAK
+              </button>
+            )}
             <div className="w-64 h-20 rounded-lg bg-background/30 border border-primary/20 backdrop-blur-sm overflow-hidden">
               <WaveformVisualizer isActive={isListening || isSpeaking} type={isSpeaking ? "speaking" : "listening"} />
             </div>
@@ -565,7 +615,7 @@ const Index = () => {
       }}>
           
           <p className="font-rajdhani text-xs text-muted-foreground md:hidden">
-            {!speechSupported ? <span className="text-destructive">Speech not supported</span> : isListening ? <span className="text-primary animate-pulse">Listening...</span> : isProcessing ? <span className="text-primary/70">Processing...</span> : <span>Tap the orb to speak</span>}
+            {!speechSupported ? <span className="text-destructive">Speech not supported</span> : isListening ? <span className="text-primary animate-pulse">Listening...</span> : isProcessing ? <span className="text-primary/70">Processing...</span> : isMobile ? <span>Hold to speak</span> : <span>Tap the orb to speak</span>}
           </p>
           
         </motion.div>
