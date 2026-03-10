@@ -10,6 +10,7 @@ type AuthSession = {
 } | null;
 
 export const useAuth = () => {
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
   const [user, setUser] = useState<AuthUser | null>(null);
   const [session, setSession] = useState<AuthSession>(null);
   const [loading, setLoading] = useState(true);
@@ -19,7 +20,7 @@ export const useAuth = () => {
 
     const loadSession = async () => {
       try {
-        const response = await fetch("/api/auth/session", {
+        const response = await fetch(`${API_BASE_URL}/api/auth/session`, {
           method: "GET",
           credentials: "include",
         });
@@ -58,7 +59,7 @@ export const useAuth = () => {
 
   const signOut = async () => {
     try {
-      await fetch("/api/auth/logout", {
+      await fetch(`${API_BASE_URL}/api/auth/logout`, {
         method: "POST",
         credentials: "include",
       });

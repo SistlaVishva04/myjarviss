@@ -27,6 +27,7 @@ const generateTitle = (messages: Message[]): string => {
 };
 const Index = () => {
   const navigate = useNavigate();
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
   const {
     user,
     loading: authLoading,
@@ -58,7 +59,7 @@ const Index = () => {
     if (!user) return;
     setIsLoadingConversations(true);
     try {
-      const response = await fetch("/api/conversations", {
+      const response = await fetch(`${API_BASE_URL}/api/conversations`, {
         method: "GET",
         credentials: "include",
       });
@@ -153,7 +154,7 @@ const Index = () => {
       return;
     }
     try {
-      const response = await fetch("/api/conversations", {
+      const response = await fetch(`${API_BASE_URL}/api/conversations`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -201,7 +202,7 @@ const Index = () => {
       }
 
       try {
-        const response = await fetch(`/api/conversations/${id}`, {
+        const response = await fetch(`${API_BASE_URL}/api/conversations/${id}`, {
           method: "DELETE",
           credentials: "include",
         });
@@ -236,7 +237,7 @@ const Index = () => {
     if (!convId) {
       if (user) {
         try {
-          const response = await fetch("/api/conversations", {
+          const response = await fetch(`${API_BASE_URL}/api/conversations`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -312,7 +313,7 @@ const Index = () => {
         content: m.text,
       }));
 
-      const response = await fetch("/api/chat", {
+      const response = await fetch(`${API_BASE_URL}/api/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
