@@ -230,40 +230,29 @@ const Index = () => {
     },
     [user, currentConversationId, conversations]
   );
+const handleHoldToSpeakStart = useCallback(() => {
+  if (!isMobile) return;
 
-  const handleHoldToSpeakStart = useCallback(
-    (e: React.TouchEvent | React.MouseEvent) => {
-      if (!isMobile) return;
-      e.preventDefault();
-      e.stopPropagation();
+  if (isHoldToSpeakActiveRef.current) return;
+  isHoldToSpeakActiveRef.current = true;
 
-      if (isHoldToSpeakActiveRef.current) return;
-      isHoldToSpeakActiveRef.current = true;
+  if (speechSupported && !isProcessing && !isSpeaking) {
+    startListening();
+    toast.info("Listening...", { duration: 2000 });
+  }
+}, [isMobile, speechSupported, isProcessing, isSpeaking, startListening]);
 
-      if (speechSupported && !isProcessing && !isSpeaking) {
-        startListening();
-        toast.info("Listening...", { duration: 2000 });
-      }
-    },
-    [isMobile, speechSupported, isProcessing, isSpeaking, startListening]
-  );
+const handleHoldToSpeakEnd = useCallback(() => {
+  if (!isMobile) return;
 
-  const handleHoldToSpeakEnd = useCallback(
-    (e: React.TouchEvent | React.MouseEvent) => {
-      if (!isMobile) return;
-      e.preventDefault();
-      e.stopPropagation();
+  if (!isHoldToSpeakActiveRef.current) return;
+  isHoldToSpeakActiveRef.current = false;
 
-      if (!isHoldToSpeakActiveRef.current) return;
-      isHoldToSpeakActiveRef.current = false;
-
-      if (isListening) {
-        pendingProcessRef.current = true;
-        stopListening();
-      }
-    },
-    [isMobile, isListening, stopListening]
-  );
+  if (isListening) {
+    pendingProcessRef.current = true;
+    stopListening();
+  }
+}, [isMobile, isListening, stopListening]);
   const handleUserInput = useCallback(async (input: string) => {
     if (!input.trim()) return;
 
@@ -579,15 +568,12 @@ const Index = () => {
             {isMobile && (
               <button
                 type="button"
-                onTouchStart={handleHoldToSpeakStart}
-                onTouchEnd={handleHoldToSpeakEnd}
-                onTouchCancel={handleHoldToSpeakEnd}
-                onMouseDown={handleHoldToSpeakStart}
-                onMouseUp={handleHoldToSpeakEnd}
-                onMouseLeave={handleHoldToSpeakEnd}
+                onPointerDown={handleHoldToSpeakStart}
+                onPointerUp={handleHoldToSpeakEnd}
+                onPointerCancel={handleHoldToSpeakEnd}
                 className="mt-4 px-6 py-3 rounded-full bg-primary text-black font-semibold shadow-lg active:scale-95 transition select-none"
               >
-                HOLD TO SPEAK
+                {isListening ? "Listening..." : "HOLD TO SPEAK"}
               </button>
             )}
             <div className="w-64 h-20 rounded-lg bg-background/30 border border-primary/20 backdrop-blur-sm overflow-hidden">
