@@ -3,10 +3,10 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { User } from "../models/User";
 import { AuthRequest } from "../middleware/authMiddleware";
+import { JWT_SECRET } from "../config/secrets";
 
 const router = Router();
 
-const JWT_SECRET = process.env.JWT_SECRET || "dev_secret_change_me";
 const JWT_EXPIRES_IN = "7d";
 
 const COOKIE_NAME = "token";
