@@ -1,18 +1,18 @@
 import { useState } from "react";
-import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import BackgroundGrid from "@/components/BackgroundGrid";
 import { z } from "zod";
+import { API_BASE_URL } from "@/lib/api";
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
 const emailSchema = z.string().email("Invalid email address");
 const passwordSchema = z.string().min(6, "Password must be at least 6 characters");
 
 const Auth = () => {
   const navigate = useNavigate();
-  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -40,14 +40,14 @@ const Auth = () => {
       const endpoint = isLogin
         ? `${API_BASE_URL}/api/auth/login`
         : `${API_BASE_URL}/api/auth/register`;
-      const response = await fetch(endpoint, {
+      const response = await fetchWithTimeout(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         credentials: "include",
         body: JSON.stringify({ email, password }),
-      });
+      }, 10_000);
 
       if (!response.ok) {
         let message = "Authentication failed";
@@ -76,121 +76,82 @@ const Auth = () => {
       }
 
       navigate("/");
-    } catch (error: any) {
-      toast.error(error.message || "Authentication failed");
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Authentication failed");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-background">
+    <main className="auth-page">
       <BackgroundGrid />
-
-      <div className="relative z-10 min-h-screen flex flex-col items-center justify-center px-4">
-        {/* Header */}
-        <motion.div
-          className="text-center mb-8"
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-        >
-          <h1 className="font-orbitron text-3xl md:text-4xl font-bold tracking-[0.3em] text-primary text-glow">
-            J.A.R.V.I.S.
+      <div className="auth-layout">
+        <a className="auth-brand" href="/" aria-label="myVishva home">
+          <span className="brand-mark" aria-hidden="true">V</span>
+          <span>myVishva</span>
+        </a>
+        <section className="auth-card" aria-labelledby="auth-heading">
+          <h1 id="auth-heading" className="auth-title">
+            {isLogin ? "Sign in to myVishva" : "Create your account"}
           </h1>
-          <p className="font-rajdhani text-xs md:text-sm text-muted-foreground tracking-widest mt-2">
-            AUTHENTICATION REQUIRED
+          <p className="auth-subtitle">
+            Keep your conversation history across sessions.
           </p>
-        </motion.div>
 
-        {/* Auth Form */}
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.2 }}
-          className="w-full max-w-md"
-        >
-          <div className="bg-card/50 backdrop-blur-xl border border-primary/30 rounded-lg p-8">
-            <h2 className="font-orbitron text-xl text-center text-primary mb-6 tracking-wider">
-              {isLogin ? "SYSTEM ACCESS" : "NEW USER REGISTRATION"}
-            </h2>
-
-            <form onSubmit={handleAuth} className="space-y-4">
-              <div>
-                <label className="font-rajdhani text-sm text-muted-foreground block mb-2">
-                  EMAIL ADDRESS
-                </label>
-                <Input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="tony@starkindustries.com"
-                  className="bg-background/50 border-primary/30 focus:border-primary font-rajdhani"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="font-rajdhani text-sm text-muted-foreground block mb-2">
-                  PASSWORD
-                </label>
-                <Input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="bg-background/50 border-primary/30 focus:border-primary font-rajdhani"
-                  required
-                />
-              </div>
-
-              <Button
-                type="submit"
-                disabled={loading}
-                className="w-full bg-primary/20 hover:bg-primary/30 text-primary border border-primary/50 font-orbitron tracking-wider mt-6"
-              >
-                {loading ? "PROCESSING..." : isLogin ? "AUTHENTICATE" : "CREATE ACCOUNT"}
-              </Button>
-            </form>
-
-            <div className="mt-6 text-center">
-              <button
-                type="button"
-                onClick={() => setIsLogin(!isLogin)}
-                className="font-rajdhani text-sm text-muted-foreground hover:text-primary transition-colors"
-              >
-                {isLogin ? "Need access? Create an account" : "Already have access? Login"}
-              </button>
+          <form onSubmit={handleAuth} className="auth-form">
+            <div>
+              <label className="auth-form-label" htmlFor="auth-email">Email address</label>
+              <Input
+                id="auth-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className="auth-field"
+                autoComplete="email"
+                required
+              />
             </div>
-          </div>
-        </motion.div>
 
-        {/* Continue as Guest */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.4 }}
-          className="mt-6"
-        >
-          <Button
-            variant="ghost"
-            onClick={() => navigate("/")}
-            className="font-rajdhani text-muted-foreground hover:text-primary"
+            <div>
+              <label className="auth-form-label" htmlFor="auth-password">Password</label>
+              <Input
+                id="auth-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="At least 6 characters"
+                className="auth-field"
+                autoComplete={isLogin ? "current-password" : "new-password"}
+                minLength={6}
+                required
+              />
+            </div>
+
+            <Button type="submit" disabled={loading} className="auth-submit w-full">
+              {loading ? "Connecting…" : isLogin ? "Sign in" : "Create account"}
+            </Button>
+          </form>
+
+          <button
+            type="button"
+            onClick={() => setIsLogin(!isLogin)}
+            className="auth-link w-full"
           >
-            Continue without login (no history)
-          </Button>
-        </motion.div>
-      </div>
+            {isLogin ? "New here? Create an account" : "Already have an account? Sign in"}
+          </button>
+        </section>
 
-      {/* Ambient glow */}
-      <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] pointer-events-none">
-        <div 
-          className="absolute inset-0 rounded-full opacity-20"
-          style={{
-            background: "radial-gradient(circle, hsl(187 100% 50% / 0.3) 0%, transparent 50%)",
-          }}
-        />
+        <Button
+          variant="ghost"
+          onClick={() => navigate("/")}
+          className="auth-link auth-guest"
+        >
+          Continue without signing in
+        </Button>
       </div>
-    </div>
+    </main>
   );
 };
 

@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { isMobileBrowser } from "@/lib/isMobile";
+import { cleanupAudioMonitor } from "@/lib/audioMonitorCleanup";
+import { cleanupSpeechRecognition } from "@/lib/speechRecognitionCleanup";
 interface SpeechRecognitionEvent {
   resultIndex: number;
   results: SpeechRecognitionResultList;
@@ -46,6 +48,7 @@ interface UseSpeechRecognitionReturn {
   resetTranscript: () => void;
   isSupported: boolean;
   error: string | null;
+  audioAnalyser: AnalyserNode | null;
 }
 
 const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
@@ -53,13 +56,94 @@ const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
   const [transcript, setTranscript] = useState("");
   const [interimTranscript, setInterimTranscript] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [audioAnalyser, setAudioAnalyser] = useState<AnalyserNode | null>(null);
   const recognitionRef = useRef<ISpeechRecognition | null>(null);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioMonitorRequestRef = useRef(0);
   const isStartingRef = useRef(false);
   const retryCountRef = useRef(0);
+  const retryTimerRef = useRef<number | null>(null);
   const maxRetries = 3;
 
   const isSupported = typeof window !== "undefined" && 
     ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
+
+  const stopAudioMonitor = useCallback(() => {
+    audioMonitorRequestRef.current += 1;
+    const stream = audioStreamRef.current;
+    const source = audioSourceRef.current;
+    const context = audioContextRef.current;
+    audioStreamRef.current = null;
+    audioSourceRef.current = null;
+    audioContextRef.current = null;
+    setAudioAnalyser(null);
+
+    void cleanupAudioMonitor(stream, source, context).catch((cleanupError: unknown) => {
+      console.warn(
+        "[SpeechRecognition] Audio monitor cleanup failed:",
+        cleanupError instanceof Error ? cleanupError.message : "Unknown cleanup error",
+      );
+    });
+  }, []);
+
+  const startAudioMonitor = useCallback(() => {
+    if (!navigator.mediaDevices?.getUserMedia || !window.AudioContext) return;
+
+    stopAudioMonitor();
+    const requestId = audioMonitorRequestRef.current;
+    let context: AudioContext;
+    try {
+      context = new window.AudioContext();
+    } catch (monitorError: unknown) {
+      console.warn(
+        "[SpeechRecognition] Audio-reactive orb unavailable:",
+        monitorError instanceof Error ? monitorError.message : "Unknown audio monitor error",
+      );
+      return;
+    }
+    audioContextRef.current = context;
+
+    void (async () => {
+      try {
+        await context.resume();
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (requestId !== audioMonitorRequestRef.current) {
+          await cleanupAudioMonitor(stream, null, context);
+          return;
+        }
+
+        audioStreamRef.current = stream;
+        const source = context.createMediaStreamSource(stream);
+        const analyser = context.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.78;
+        source.connect(analyser);
+        audioSourceRef.current = source;
+        setAudioAnalyser(analyser);
+      } catch (monitorError: unknown) {
+        if (requestId !== audioMonitorRequestRef.current) return;
+
+        const stream = audioStreamRef.current;
+        const source = audioSourceRef.current;
+        audioStreamRef.current = null;
+        audioSourceRef.current = null;
+        audioContextRef.current = null;
+        setAudioAnalyser(null);
+        await cleanupAudioMonitor(stream, source, context).catch((cleanupError: unknown) => {
+          console.warn(
+            "[SpeechRecognition] Audio monitor cleanup failed:",
+            cleanupError instanceof Error ? cleanupError.message : "Unknown cleanup error",
+          );
+        });
+        console.warn(
+          "[SpeechRecognition] Audio-reactive orb unavailable:",
+          monitorError instanceof Error ? monitorError.message : "Unknown audio monitor error",
+        );
+      }
+    })();
+  }, [stopAudioMonitor]);
 
   const createRecognition = useCallback(() => {
     if (!isSupported) return null;
@@ -74,6 +158,7 @@ const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
     recognition.lang = "en-US";
 
     recognition.onstart = () => {
+      if (recognitionRef.current !== recognition) return;
       console.log("[SpeechRecognition] Started successfully");
       setIsListening(true);
       setError(null);
@@ -82,14 +167,18 @@ const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
     };
 
     recognition.onend = () => {
+      if (recognitionRef.current !== recognition) return;
       console.log("[SpeechRecognition] Ended");
       setIsListening(false);
       isStartingRef.current = false;
+      stopAudioMonitor();
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      if (recognitionRef.current !== recognition) return;
       console.error("[SpeechRecognition] Error:", event.error);
       isStartingRef.current = false;
+      stopAudioMonitor();
       
       // Handle specific errors
       switch (event.error) {
@@ -117,6 +206,7 @@ const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
     };
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
+      if (recognitionRef.current !== recognition) return;
       let finalTranscript = "";
       let interimText = "";
 
@@ -138,21 +228,20 @@ const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
     };
 
     return recognition;
-  }, [isSupported]);
+  }, [isSupported, stopAudioMonitor]);
 
   useEffect(() => {
     recognitionRef.current = createRecognition();
 
     return () => {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.abort();
-        } catch {
-          // Ignore cleanup errors
-        }
-      }
+      cleanupSpeechRecognition(
+        recognitionRef.current,
+        retryTimerRef.current,
+        (timerId) => window.clearTimeout(timerId),
+      );
+      stopAudioMonitor();
     };
-  }, [createRecognition]);
+  }, [createRecognition, stopAudioMonitor]);
 
   const startListening = useCallback(() => {
     if (!isSupported) {
@@ -170,6 +259,7 @@ const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
     setInterimTranscript("");
     setError(null);
     isStartingRef.current = true;
+    startAudioMonitor();
 
     const attemptStart = () => {
       try {
@@ -195,20 +285,26 @@ const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
         if (retryCountRef.current < maxRetries) {
           retryCountRef.current++;
           console.log(`[SpeechRecognition] Retrying... (${retryCountRef.current}/${maxRetries})`);
-          setTimeout(attemptStart, 100);
+          retryTimerRef.current = window.setTimeout(attemptStart, 100);
         } else {
           isStartingRef.current = false;
+          stopAudioMonitor();
           setError("Failed to start speech recognition. Please try again.");
         }
       }
     };
 
     attemptStart();
-  }, [isSupported, isListening, createRecognition]);
+  }, [isSupported, isListening, createRecognition, startAudioMonitor, stopAudioMonitor]);
 
   const stopListening = useCallback(() => {
     console.log("[SpeechRecognition] Stopping...");
     isStartingRef.current = false;
+    stopAudioMonitor();
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
     
     if (recognitionRef.current) {
       try {
@@ -223,7 +319,7 @@ const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
       }
     }
     setIsListening(false);
-  }, []);
+  }, [stopAudioMonitor]);
 
   const resetTranscript = useCallback(() => {
     setTranscript("");
@@ -239,6 +335,7 @@ const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
     resetTranscript,
     isSupported,
     error,
+    audioAnalyser,
   };
 };
 

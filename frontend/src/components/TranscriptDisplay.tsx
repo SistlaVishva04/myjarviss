@@ -1,7 +1,7 @@
-import { motion, AnimatePresence } from "framer-motion";
 import { useEffect, useRef } from "react";
+import { Sparkles } from "lucide-react";
 
-interface Message {
+export interface Message {
   id: string;
   type: "user" | "assistant";
   text: string;
@@ -11,72 +11,119 @@ interface Message {
 interface TranscriptDisplayProps {
   messages: Message[];
   currentTranscript?: string;
+  isThinking?: boolean;
+  isLoadingMessages?: boolean;
+  hasMoreMessages?: boolean;
+  isLoadingOlderMessages?: boolean;
+  onLoadOlderMessages?: () => void;
 }
 
-const TranscriptDisplay = ({ messages, currentTranscript }: TranscriptDisplayProps) => {
+const TranscriptDisplay = ({
+  messages,
+  currentTranscript,
+  isThinking,
+  isLoadingMessages,
+  hasMoreMessages,
+  isLoadingOlderMessages,
+  onLoadOlderMessages,
+}: TranscriptDisplayProps) => {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const pendingScrollHeightRef = useRef<number | null>(null);
+  const messageCountBeforeLoadRef = useRef(0);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    const container = scrollRef.current;
+    if (!container) return;
+
+    if (pendingScrollHeightRef.current !== null) {
+      if (messages.length > messageCountBeforeLoadRef.current) {
+        container.scrollTop += container.scrollHeight - pendingScrollHeightRef.current;
+      }
+      pendingScrollHeightRef.current = null;
+    } else if (shouldStickToBottomRef.current) {
+      container.scrollTop = container.scrollHeight;
     }
-  }, [messages, currentTranscript]);
+  }, [messages, currentTranscript, isLoadingMessages, isLoadingOlderMessages]);
+
+  const loadOlderMessages = () => {
+    if (scrollRef.current) {
+      pendingScrollHeightRef.current = scrollRef.current.scrollHeight;
+      messageCountBeforeLoadRef.current = messages.length;
+    }
+    onLoadOlderMessages?.();
+  };
+  const lastMessage = messages[messages.length - 1];
+  const showThinking = Boolean(isThinking && lastMessage?.type === "assistant" && !lastMessage.text);
 
   return (
-    <div 
+    <div
       ref={scrollRef}
-      className="h-[200px] overflow-y-auto scrollbar-thin scrollbar-thumb-primary/20 scrollbar-track-transparent pr-2"
+      className="conversation-messages overflow-y-auto"
+      role="log"
+      aria-label="Conversation messages"
+      aria-live="polite"
+      aria-relevant="additions text"
+      onScroll={(event) => {
+        const element = event.currentTarget;
+        shouldStickToBottomRef.current =
+          element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+      }}
     >
-      <AnimatePresence mode="popLayout">
-        {messages.map((message) => (
-          <motion.div
+      {hasMoreMessages && onLoadOlderMessages && (
+        <button
+          type="button"
+          className="message-load-older"
+          disabled={isLoadingOlderMessages}
+          onClick={loadOlderMessages}
+        >
+          {isLoadingOlderMessages ? "Loading earlier messages…" : "Load earlier messages"}
+        </button>
+      )}
+
+      {isLoadingMessages && messages.length === 0 ? (
+        <div className="conversation-loading" role="status">
+          <span />
+          <span />
+          <span />
+          <span className="sr-only">Loading conversation</span>
+        </div>
+      ) : (
+        messages.map((message) => (
+          <article
             key={message.id}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className={`mb-3 ${message.type === "user" ? "text-right" : "text-left"}`}
+            className={`message-row ${message.type === "user" ? "is-user" : "is-assistant"}`}
           >
-            <div className="text-[10px] font-orbitron text-primary/50 uppercase tracking-wider mb-1">
-              {message.type === "user" ? "USER" : "ASSISTANT"}
-            </div>
-            <div
-              className={`inline-block px-3 py-2 rounded-lg text-sm max-w-[90%] ${
-                message.type === "user"
-                  ? "bg-primary/20 text-foreground border border-primary/30"
-                  : "bg-secondary/50 text-foreground border border-accent/20"
-              }`}
-            >
+            {message.type === "assistant" && (
+              <span className="message-avatar" aria-hidden="true">
+                <Sparkles size={15} />
+              </span>
+            )}
+            <div className="message-body">
+              <span className="sr-only">{message.type === "user" ? "You said: " : "Vishva replied: "}</span>
               {message.text}
             </div>
-          </motion.div>
-        ))}
+          </article>
+        ))
+      )}
 
-        {/* Live transcript indicator */}
-        {currentTranscript && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="text-right mb-3"
-          >
-            <div className="text-[10px] font-orbitron text-accent/70 uppercase tracking-wider mb-1 flex items-center justify-end gap-2">
-              <motion.div
-                className="w-2 h-2 rounded-full bg-accent"
-                animate={{ opacity: [1, 0.3, 1] }}
-                transition={{ duration: 0.5, repeat: Infinity }}
-              />
-              PROCESSING
-            </div>
-            <div className="inline-block px-3 py-2 rounded-lg text-sm bg-accent/10 text-foreground/70 border border-accent/20 italic">
-              {currentTranscript}...
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {currentTranscript && (
+        <p className="listening-transcript" role="status">
+          {currentTranscript}
+        </p>
+      )}
 
-      {messages.length === 0 && !currentTranscript && (
-        <div className="text-center text-muted-foreground/50 text-sm mt-8">
-          Click the orb to begin...
+      {showThinking && (
+        <div className="message-row is-assistant" role="status" aria-label="Vishva is thinking">
+          <span className="message-avatar" aria-hidden="true">
+            <Sparkles size={15} />
+          </span>
+          <div className="thinking-indicator"><span /> Vishva is thinking</div>
         </div>
+      )}
+
+      {messages.length === 0 && !currentTranscript && !isThinking && !isLoadingMessages && (
+        <p className="conversation-empty">Your conversation will appear here.</p>
       )}
     </div>
   );

@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import mongoose from "mongoose";
 import { connectDB } from "./config/db";
 import authRoutes from "./routes/auth";
 import conversationsRoutes from "./routes/conversations";
@@ -42,7 +43,10 @@ app.use("/api/conversations", conversationsRoutes);
 app.use("/api/chat", chatRoutes);
 
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok" });
+  const databaseConnected = mongoose.connection.readyState === 1;
+  return res
+    .status(databaseConnected ? 200 : 503)
+    .json({ status: databaseConnected ? "ok" : "unavailable" });
 });
 
 const start = async () => {
@@ -55,4 +59,3 @@ const start = async () => {
 };
 
 void start();
-
