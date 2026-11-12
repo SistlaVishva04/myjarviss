@@ -6,6 +6,7 @@ import { AuthRequest } from "../middleware/authMiddleware";
 import { Conversation } from "../models/Conversation";
 import { Message } from "../models/Message";
 import { persistChatTurn } from "../lib/persistChatTurn";
+import { JWT_SECRET } from "../config/secrets";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -19,7 +20,6 @@ type ChatRequest = {
 
 const router = Router();
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const JWT_SECRET = process.env.JWT_SECRET || "dev_secret_change_me";
 const COOKIE_NAME = "token";
 const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
 
