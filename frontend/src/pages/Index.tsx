@@ -230,16 +230,24 @@ const Index = () => {
     },
     [user, currentConversationId, conversations]
   );
-const handleHoldToSpeakStart = useCallback(() => {
+const handleHoldToSpeakStart = useCallback(async () => {
   if (!isMobile) return;
 
   if (isHoldToSpeakActiveRef.current) return;
   isHoldToSpeakActiveRef.current = true;
 
   if (speechSupported && !isProcessing && !isSpeaking) {
-    startListening();
-    toast.info("Listening...", { duration: 2000 });
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      startListening();
+      toast.info("Listening...", { duration: 2000 });
+
+    } catch (err) {
+      toast.error("Microphone permission denied");
+    }
   }
+
 }, [isMobile, speechSupported, isProcessing, isSpeaking, startListening]);
 
 const handleHoldToSpeakEnd = useCallback(() => {
