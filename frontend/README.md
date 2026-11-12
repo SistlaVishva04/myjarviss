@@ -1,4 +1,4 @@
-# JARVIS Frontend
+# myVishva Frontend
 
 ## Tech stack
 

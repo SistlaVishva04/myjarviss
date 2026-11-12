@@ -1,21 +1,23 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { motion } from "framer-motion";
-import { History, Plus, LogIn, LogOut, Info } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { Menu, Plus, LogIn, LogOut, Sparkles } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import JarvisOrb, { OrbState } from "@/components/JarvisOrb";
-import HUDPanel from "@/components/HUDPanel";
+import VishvaCoreOrb, { OrbState } from "@/components/VishvaCoreOrb";
 import BackgroundGrid from "@/components/BackgroundGrid";
-import TranscriptDisplay from "@/components/TranscriptDisplay";
+import TranscriptDisplay, { Message } from "@/components/TranscriptDisplay";
 import StatusIndicator from "@/components/StatusIndicator";
 import WaveformVisualizer from "@/components/WaveformVisualizer";
-import ChatHistorySidebar, { Conversation, Message } from "@/components/ChatHistorySidebar";
+import ChatHistorySidebar, { Conversation } from "@/components/ChatHistorySidebar";
+import ChatComposer, { ChatComposerHandle } from "@/components/ChatComposer";
 import CreditsModal from "@/components/CreditsModal";
-import { Button } from "@/components/ui/button";
 import useSpeechRecognition from "@/hooks/useSpeechRecognition";
 import useTextToSpeech from "@/hooks/useTextToSpeech";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { isMobileBrowser } from "@/lib/isMobile";
+import { API_BASE_URL } from "@/lib/api";
+import { readChatStream } from "@/lib/readChatStream";
+import { toSpeechText } from "@/lib/speechText";
 
 // Generate title from first message
 const generateTitle = (messages: Message[]): string => {
@@ -28,48 +30,56 @@ const generateTitle = (messages: Message[]): string => {
 };
 const Index = () => {
   const navigate = useNavigate();
-  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
   const isMobile = isMobileBrowser();
+  const shouldReduceMotion = useReducedMotion();
   const {
     user,
     loading: authLoading,
-    signOut
+    signOut,
+    backendAvailable,
+    sessionError,
+    reportBackendStatus,
   } = useAuth();
   const [orbState, setOrbState] = useState<OrbState>("idle");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isCreditsOpen, setIsCreditsOpen] = useState(false);
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
+  const [isLoadingMoreConversations, setIsLoadingMoreConversations] = useState(false);
+  const [hasMoreConversations, setHasMoreConversations] = useState(false);
+  const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
+  const [isLoadingSelectedConversation, setIsLoadingSelectedConversation] = useState(false);
+  const composerRef = useRef<ChatComposerHandle>(null);
   const isSpacePressed = useRef(false);
   const pendingProcessRef = useRef(false);
   const isHoldToSpeakActiveRef = useRef(false);
+  const conversationPageRef = useRef(1);
+  const selectedMessageRequestRef = useRef(0);
 
   // Get current conversation messages
   const currentConversation = conversations.find(c => c.id === currentConversationId);
   const messages = currentConversation?.messages || [];
 
-  // Load conversations from backend when user is authenticated
-  useEffect(() => {
-    if (user) {
-      loadConversations();
-    } else {
-      setConversations([]);
-      setCurrentConversationId(null);
-    }
-  }, [user]);
-  const loadConversations = async () => {
+  const loadConversations = useCallback(async (append = false) => {
     if (!user) return;
-    setIsLoadingConversations(true);
+    const page = append ? conversationPageRef.current + 1 : 1;
+    if (append) setIsLoadingMoreConversations(true);
+    else setIsLoadingConversations(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/conversations`, {
+      const response = await fetch(
+        `${API_BASE_URL}/api/conversations?page=${page}&limit=20`,
+        {
         method: "GET",
         credentials: "include",
-      });
+        },
+      );
 
       if (!response.ok) {
-        throw new Error("Failed to load conversations");
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error || "Failed to load conversations");
       }
 
       const data = await response.json();
@@ -78,40 +88,54 @@ const Index = () => {
         title: string;
         createdAt: string;
         updatedAt: string;
-        messages?: Array<{
-          id: string;
-          sender: "user" | "assistant" | "jarvis";
-          text: string;
-          timestamp: string;
-        }>;
+        messageCount: number;
       }>;
 
-      const conversationsWithMessages: Conversation[] = convs.map((conv) => ({
+      const summaries: Conversation[] = convs.map((conv) => ({
         id: conv.id,
         title: conv.title,
-        messages:
-          conv.messages?.map((m) => ({
-            id: m.id,
-            type: m.sender === "jarvis" ? "assistant" : (m.sender as "user" | "assistant"),
-            text: m.text,
-            timestamp: new Date(m.timestamp),
-          })) ?? [],
+        messages: [],
         createdAt: new Date(conv.createdAt),
         updatedAt: new Date(conv.updatedAt),
+        messageCount: conv.messageCount,
+        messagesPage: 0,
+        hasMoreMessages: conv.messageCount > 0,
       }));
 
-      setConversations(conversationsWithMessages);
+      conversationPageRef.current = page;
+      setHasMoreConversations(Boolean(data?.hasMore));
+      setConversations((previous) =>
+        append
+          ? [...previous, ...summaries.filter(
+              (summary) => !previous.some((item) => item.id === summary.id),
+            )]
+          : summaries,
+      );
     } catch (error) {
       console.error("Error loading conversations:", error);
-      toast.error("Failed to load conversations");
+      toast.error(error instanceof Error ? error.message : "Failed to load conversations");
     } finally {
-      setIsLoadingConversations(false);
+      if (append) setIsLoadingMoreConversations(false);
+      else setIsLoadingConversations(false);
     }
-  };
+  }, [user]);
+
+  useEffect(() => {
+    if (user) {
+      conversationPageRef.current = 1;
+      void loadConversations();
+    } else {
+      setConversations([]);
+      setCurrentConversationId(null);
+      setHasMoreConversations(false);
+      conversationPageRef.current = 1;
+    }
+  }, [user, loadConversations]);
   const {
     isListening,
     transcript,
     interimTranscript,
+    audioAnalyser,
     startListening,
     stopListening,
     resetTranscript,
@@ -126,14 +150,123 @@ const Index = () => {
 
   // Update orb state based on current activity
   useEffect(() => {
-    if (isSpeaking) {
+    if (speechError) {
+      setOrbState("error");
+    } else if (isSpeaking) {
       setOrbState("speaking");
-    } else if (isListening || isProcessing) {
+    } else if (isProcessing) {
+      setOrbState("thinking");
+    } else if (isListening) {
       setOrbState("listening");
     } else {
       setOrbState("idle");
     }
-  }, [isListening, isSpeaking, isProcessing]);
+  }, [isListening, isSpeaking, isProcessing, speechError]);
+
+  const handleSelectConversation = useCallback(async (id: string) => {
+    setCurrentConversationId(id);
+    if (!user) return;
+
+    const conversation = conversations.find((item) => item.id === id);
+    if (conversation?.messagesPage) return;
+
+    const requestId = ++selectedMessageRequestRef.current;
+    setIsLoadingSelectedConversation(true);
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/conversations/${id}/messages?page=1&limit=50`,
+        { credentials: "include" },
+      );
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error || "Failed to load conversation messages");
+      }
+
+      const data = await response.json();
+      if (requestId !== selectedMessageRequestRef.current) return;
+      reportBackendStatus(true);
+      setConversations((previous) =>
+        previous.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                messages: (data.messages || []).map((message: {
+                  id: string;
+                  sender: "user" | "assistant";
+                  text: string;
+                  timestamp: string;
+                }) => ({
+                  id: message.id,
+                  type: message.sender,
+                  text: message.text,
+                  timestamp: new Date(message.timestamp),
+                })),
+                messagesPage: data.page,
+                hasMoreMessages: data.hasMore,
+              }
+            : item,
+        ),
+      );
+    } catch (error) {
+      if (requestId === selectedMessageRequestRef.current) {
+        reportBackendStatus(false);
+        toast.error(error instanceof Error ? error.message : "Failed to load conversation messages");
+      }
+    } finally {
+      if (requestId === selectedMessageRequestRef.current) {
+        setIsLoadingSelectedConversation(false);
+      }
+    }
+  }, [conversations, reportBackendStatus, user]);
+
+  const loadOlderMessages = useCallback(async () => {
+    if (!user || !currentConversation) return;
+    const page = (currentConversation.messagesPage ?? 1) + 1;
+    setIsLoadingOlderMessages(true);
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/conversations/${currentConversation.id}/messages?page=${page}&limit=50`,
+        { credentials: "include" },
+      );
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error || "Failed to load earlier messages");
+      }
+
+      const data = await response.json();
+      reportBackendStatus(true);
+      setConversations((previous) =>
+        previous.map((item) =>
+          item.id === currentConversation.id
+            ? {
+                ...item,
+                messages: [
+                  ...(data.messages || []).map((message: {
+                    id: string;
+                    sender: "user" | "assistant";
+                    text: string;
+                    timestamp: string;
+                  }) => ({
+                    id: message.id,
+                    type: message.sender,
+                    text: message.text,
+                    timestamp: new Date(message.timestamp),
+                  })),
+                  ...item.messages,
+                ],
+                messagesPage: data.page,
+                hasMoreMessages: data.hasMore,
+              }
+            : item,
+        ),
+      );
+    } catch (error) {
+      reportBackendStatus(false);
+      toast.error(error instanceof Error ? error.message : "Failed to load earlier messages");
+    } finally {
+      setIsLoadingOlderMessages(false);
+    }
+  }, [currentConversation, reportBackendStatus, user]);
 
   // Handle speech errors
   useEffect(() => {
@@ -230,22 +363,17 @@ const Index = () => {
     },
     [user, currentConversationId, conversations]
   );
-const handleHoldToSpeakStart = useCallback(async () => {
+const handleHoldToSpeakStart = useCallback(() => {
   if (!isMobile) return;
 
   if (isHoldToSpeakActiveRef.current) return;
   isHoldToSpeakActiveRef.current = true;
 
   if (speechSupported && !isProcessing && !isSpeaking) {
-    try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      startListening();
-      toast.info("Listening...", { duration: 2000 });
-
-    } catch (err) {
-      toast.error("Microphone permission denied");
-    }
+    startListening();
+    toast.info("Listening...", { duration: 2000 });
+  } else if (!speechSupported) {
+    toast.error("Speech recognition is not supported in this browser");
   }
 
 }, [isMobile, speechSupported, isProcessing, isSpeaking, startListening]);
@@ -262,157 +390,175 @@ const handleHoldToSpeakEnd = useCallback(() => {
   }
 }, [isMobile, isListening, stopListening]);
   const handleUserInput = useCallback(async (input: string) => {
-    if (!input.trim()) return;
+    const text = input.trim();
+    if (!text || isProcessing) return;
 
-    // Create new conversation if none exists
     let convId = currentConversationId;
     if (!convId) {
       if (user) {
         try {
           const response = await fetch(`${API_BASE_URL}/api/conversations`, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
+            headers: { "Content-Type": "application/json" },
             credentials: "include",
-            body: JSON.stringify({
-              title: "New Conversation",
-            }),
+            body: JSON.stringify({ title: "New Conversation" }),
           });
-
           if (!response.ok) {
-            throw new Error("Failed to create conversation");
+            const data = await response.json().catch(() => null);
+            throw new Error(data?.error || "Failed to create conversation");
           }
 
           const data = await response.json();
           convId = data.id;
-          const newConv: Conversation = {
+          setConversations((previous) => [{
             id: data.id,
             title: data.title ?? "New Conversation",
             messages: [],
             createdAt: new Date(data.createdAt ?? Date.now()),
             updatedAt: new Date(data.updatedAt ?? Date.now()),
-          };
-          setConversations((prev) => [newConv, ...prev]);
+            messageCount: 0,
+            messagesPage: 1,
+            hasMoreMessages: false,
+          }, ...previous]);
         } catch (error) {
-          console.error("Error creating conversation:", error);
-          toast.error("Failed to create conversation");
+          toast.error(error instanceof Error ? error.message : "Failed to create conversation");
           return;
         }
       } else {
-        // For non-authenticated users
         convId = Date.now().toString();
-        const newConv: Conversation = {
+        setConversations([{
           id: convId,
           title: "New Conversation",
           messages: [],
           createdAt: new Date(),
           updatedAt: new Date(),
-        };
-        setConversations([newConv]);
+          messageCount: 0,
+          messagesPage: 1,
+          hasMoreMessages: false,
+        }]);
       }
       setCurrentConversationId(convId);
     }
+
     const userMessage: Message = {
       id: Date.now().toString(),
       type: "user",
-      text: input.trim(),
-      timestamp: new Date()
+      text,
+      timestamp: new Date(),
     };
-
-    // Update local state with user message
-    setConversations(prev => prev.map(c => {
-      if (c.id === convId) {
-        const updatedMessages = [...c.messages, userMessage];
-        const newTitle =
-          c.messages.length === 0 ? generateTitle(updatedMessages) : c.title;
-        return {
-          ...c,
-          messages: updatedMessages,
-          title: newTitle,
-          updatedAt: new Date()
-        };
-      }
-      return c;
+    const assistantMessageId = `${Date.now() + 1}`;
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      type: "assistant",
+      text: "",
+      timestamp: new Date(),
+    };
+    setConversations((previous) => previous.map((conversation) => {
+      if (conversation.id !== convId) return conversation;
+      const newTitle = conversation.messages.length === 0
+        ? generateTitle([userMessage])
+        : conversation.title;
+      return {
+        ...conversation,
+        title: newTitle,
+        messages: [...conversation.messages, userMessage, assistantMessage],
+        messageCount: (conversation.messageCount ?? conversation.messages.length) + 2,
+        updatedAt: new Date(),
+      };
     }));
+
     setIsProcessing(true);
+    let streamedReply = "";
+    let pendingFrame: number | null = null;
     try {
-      // Get updated messages for this conversation
-      const currentConv = conversations.find((c) => c.id === convId);
-      const allMessages = [...(currentConv?.messages || []), userMessage];
-      const conversationHistory = allMessages.map((m) => ({
-        role: m.type === "user" ? "user" : "assistant",
-        content: m.text,
+      const currentConv = conversations.find((conversation) => conversation.id === convId);
+      const conversationHistory = [
+        ...(currentConv?.messages || []),
+        userMessage,
+      ].slice(-10).map((message) => ({
+        role: message.type === "user" ? "user" : "assistant",
+        content: message.text,
       }));
 
-      const response = await fetch(`${API_BASE_URL}/api/chat`, {
+      const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
           conversationId: convId,
           messages: conversationHistory,
         }),
       });
+      reportBackendStatus(response.status < 500);
 
       if (!response.ok) {
-        let message = "Failed to get response";
-        try {
-          const data = await response.json();
-          if (data?.error || data?.message) {
-            message = data.error || data.message;
-          }
-        } catch {
-          // ignore JSON parse errors
-        }
-        throw new Error(message);
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error || "Failed to get response");
       }
 
-      const data = await response.json();
-      const reply =
-        data?.reply ||
-        "I apologize, Sir. I'm having difficulty processing that request.";
+      const result = await readChatStream(response, (delta) => {
+        streamedReply += delta;
+        if (pendingFrame !== null) return;
+        pendingFrame = window.requestAnimationFrame(() => {
+          pendingFrame = null;
+          setConversations((previous) => previous.map((conversation) =>
+            conversation.id === convId
+              ? {
+                  ...conversation,
+                  messages: conversation.messages.map((message) =>
+                    message.id === assistantMessageId
+                      ? { ...message, text: streamedReply }
+                      : message,
+                  ),
+                }
+              : conversation,
+          ));
+        });
+      });
 
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        type: "assistant",
-        text: reply,
-        timestamp: new Date(),
-      };
-
-      // Update local state with assistant message
-      setConversations((prev) =>
-        prev.map((c) => {
-          if (c.id === convId) {
-            return {
-              ...c,
-              messages: [...c.messages, assistantMessage],
+      if (pendingFrame !== null) window.cancelAnimationFrame(pendingFrame);
+      setConversations((previous) => previous.map((conversation) =>
+        conversation.id === convId
+          ? {
+              ...conversation,
+              title: conversation.messages.length <= 2
+                ? generateTitle([userMessage])
+                : conversation.title,
+              messages: conversation.messages.map((message) =>
+                message.id === assistantMessageId
+                  ? { ...message, text: result.reply }
+                  : message,
+              ),
               updatedAt: new Date(),
-            };
-          }
-          return c;
-        })
-      );
+            }
+          : conversation,
+      ));
 
-      if (ttsSupported) {
-        speak(reply);
-      }
-    } catch (err: any) {
-      console.error("Chat error:", err);
-      const errorMsg = err?.message || "Failed to get response";
-      toast.error(errorMsg);
+      if (ttsSupported) speak(toSpeechText(result.reply));
+    } catch (error: unknown) {
+      if (pendingFrame !== null) window.cancelAnimationFrame(pendingFrame);
+      if (error instanceof TypeError) reportBackendStatus(false);
+      setConversations((previous) => previous.map((conversation) =>
+        conversation.id === convId
+          ? {
+              ...conversation,
+              messages: conversation.messages.filter(
+                (message) => message.id !== assistantMessageId,
+              ),
+              messageCount: Math.max(0, (conversation.messageCount ?? 2) - 1),
+            }
+          : conversation,
+      ));
+      toast.error(error instanceof Error ? error.message : "Failed to get response");
     } finally {
       setIsProcessing(false);
     }
-  }, [currentConversationId, conversations, user, speak, ttsSupported]);
+  }, [currentConversationId, conversations, user, speak, ttsSupported, isProcessing, reportBackendStatus]);
 
   // Process transcript - use interim if final isn't available yet
   const processTranscript = useCallback(async () => {
     const textToProcess = transcript || interimTranscript;
     if (textToProcess && !isProcessing) {
-      console.log("[Processing] Transcript:", textToProcess);
       await handleUserInput(textToProcess);
       resetTranscript();
     }
@@ -433,7 +579,10 @@ const handleHoldToSpeakEnd = useCallback(() => {
   // Spacebar hold-to-listen
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === "Space" && !isSpacePressed.current && !e.repeat) {
+      const target = e.target;
+      const isEditing = target instanceof HTMLElement &&
+        (target.isContentEditable || Boolean(target.closest("input, textarea, button, select, [role='textbox']")));
+      if (e.code === "Space" && !isEditing && !isSpacePressed.current && !e.repeat) {
         e.preventDefault();
         isSpacePressed.current = true;
         if (speechSupported && !isProcessing && !isSpeaking) {
@@ -442,10 +591,13 @@ const handleHoldToSpeakEnd = useCallback(() => {
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
+      const target = e.target;
+      const isEditing = target instanceof HTMLElement &&
+        (target.isContentEditable || Boolean(target.closest("input, textarea, button, select, [role='textbox']")));
       if (e.code === "Space" && isSpacePressed.current) {
         e.preventDefault();
         isSpacePressed.current = false;
-        if (isListening) {
+        if (!isEditing && isListening) {
           pendingProcessRef.current = true;
           stopListening();
         }
@@ -480,162 +632,284 @@ const handleHoldToSpeakEnd = useCallback(() => {
     setCurrentConversationId(null);
     toast.success("Signed out successfully");
   };
+
+  const closeCredits = useCallback(() => setIsCreditsOpen(false), []);
+  const closeHistory = useCallback(() => setIsHistoryOpen(false), []);
   const currentTime = new Date().toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
-    hour12: false
+    hour12: false,
   });
   const currentDate = new Date().toLocaleDateString("en-US", {
     weekday: "long",
     year: "numeric",
     month: "long",
-    day: "numeric"
+    day: "numeric",
   });
+  const connectionState = backendAvailable === null
+    ? "checking"
+    : backendAvailable
+      ? "connected"
+      : "disconnected";
+  const hasStartedConversation = messages.length > 0 ||
+    (currentConversation?.messageCount ?? 0) > 0 ||
+    isProcessing;
+  const greeting = user?.email ? "Welcome back" : "What can I help with?";
+  const prompts = [
+    { label: "Coding", prompt: "Help me solve a coding problem." },
+    { label: "Cooking", prompt: "Suggest a simple meal I can cook." },
+    { label: "Health", prompt: "Share general wellness guidance for me." },
+    { label: "Trips", prompt: "Help me plan a trip." },
+    { label: "Troubleshoot", prompt: "Help me troubleshoot a problem." },
+  ];
+  const transition = {
+    duration: shouldReduceMotion ? 0.15 : 0.28,
+    ease: "easeOut" as const,
+  };
+
   if (authLoading) {
-    return <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="font-orbitron text-primary animate-pulse">INITIALIZING...</div>
-      </div>;
+    return (
+      <main className="assistant-loading" role="status" aria-live="polite">
+        <BackgroundGrid />
+        <Sparkles size={20} aria-hidden="true" />
+        <span>Starting myVishva…</span>
+      </main>
+    );
   }
-  return <div className="relative min-h-screen overflow-hidden bg-background">
+
+  return (
+    <div className="assistant-shell">
       <BackgroundGrid />
+      <ChatHistorySidebar
+        isOpen={isHistoryOpen}
+        isCollapsed={isSidebarCollapsed}
+        onClose={closeHistory}
+        onToggleCollapsed={() => setIsSidebarCollapsed((collapsed) => !collapsed)}
+        conversations={conversations}
+        currentConversationId={currentConversationId}
+        onSelectConversation={handleSelectConversation}
+        onNewChat={createNewConversation}
+        onDeleteConversation={deleteConversation}
+        hasMoreConversations={hasMoreConversations}
+        isLoadingMoreConversations={isLoadingMoreConversations}
+        isLoadingConversations={isLoadingConversations}
+        onLoadMoreConversations={() => void loadConversations(true)}
+        userLabel={user?.email ?? null}
+        onSignIn={() => navigate("/auth")}
+        onSignOut={handleSignOut}
+        onOpenCredits={() => setIsCreditsOpen(true)}
+      />
 
-      {/* History Sidebar - Only for authenticated users */}
-      {user && <ChatHistorySidebar isOpen={isHistoryOpen} onClose={() => setIsHistoryOpen(false)} conversations={conversations} currentConversationId={currentConversationId} onSelectConversation={setCurrentConversationId} onNewChat={createNewConversation} onDeleteConversation={deleteConversation} />}
-
-      {/* Top left controls */}
-      <motion.div className="absolute top-4 left-4 md:top-8 md:left-8 flex items-center gap-1 md:gap-2 z-20" initial={{
-      opacity: 0,
-      x: -20
-    }} animate={{
-      opacity: 1,
-      x: 0
-    }} transition={{
-      delay: 0.3
-    }}>
-        {user ? <>
-            <Button variant="ghost" size="icon" onClick={() => setIsHistoryOpen(true)} className="bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30">
-              <History className="h-5 w-5" />
-            </Button>
-            <Button variant="ghost" size="icon" onClick={createNewConversation} className="bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30">
-              <Plus className="h-5 w-5" />
-            </Button>
-            <Button variant="ghost" size="icon" onClick={handleSignOut} className="bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30" title="Sign Out">
-              <LogOut className="h-5 w-5" />
-            </Button>
-          </> : <Button variant="ghost" size="sm" onClick={() => navigate("/auth")} className="bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 font-rajdhani">
-            <LogIn className="h-4 w-4 mr-2" />
-            Login for History
-          </Button>}
-      </motion.div>
-
-      <div className="relative z-10 min-h-screen flex flex-col items-center justify-center px-4 py-8">
-
-        {/* Time display */}
-        <motion.div className="absolute top-4 right-4 md:top-8 md:right-8 text-right" initial={{
-        opacity: 0
-      }} animate={{
-        opacity: 1
-      }} transition={{
-        delay: 0.4
-      }}>
-          <div className="font-orbitron text-sm md:text-3xl text-primary text-glow">{currentTime}</div>
-          <div className="font-rajdhani text-[10px] md:text-xs text-muted-foreground tracking-wider hidden md:block">
-            {currentDate}
-          </div>
-        </motion.div>
-
-        {/* Main grid layout */}
-        <div className="flex flex-col lg:flex-row items-center justify-center gap-8 lg:gap-16 w-full max-w-6xl mt-16 lg:mt-0">
-          {/* Left panel - Status */}
-          <div className="order-2 lg:order-1 w-full lg:w-auto">
-            <HUDPanel title="System Status" position="left">
-              <StatusIndicator isConnected={true} isListening={isListening} isSpeaking={isSpeaking} />
-            </HUDPanel>
-          </div>
-
-          {/* Center - Title, Orb with Waveform */}
-          <div className="order-1 lg:order-2 flex-shrink-0 flex flex-col items-center gap-4">
-            <motion.div className="text-center" initial={{
-            opacity: 0,
-            y: -20
-          }} animate={{
-            opacity: 1,
-            y: 0
-          }} transition={{
-            delay: 0.2
-          }}>
-              <h1 className="font-orbitron text-lg sm:text-2xl md:text-3xl font-bold tracking-[0.2em] md:tracking-[0.3em] text-primary text-glow">
-                J.A.R.V.I.S.
-              </h1>
-              <p className="font-rajdhani text-[10px] sm:text-xs md:text-sm text-muted-foreground tracking-widest mt-1">
-                JUST A RATHER VERY INTELLIGENT SYSTEM
-              </p>
-            </motion.div>
-            <JarvisOrb state={orbState} onClick={isMobile ? undefined : handleOrbClick} />
-
-            {isMobile && (
-              <button
-                type="button"
-                onPointerDown={handleHoldToSpeakStart}
-                onPointerUp={handleHoldToSpeakEnd}
-                onPointerCancel={handleHoldToSpeakEnd}
-                className="mt-4 px-6 py-3 rounded-full bg-primary text-black font-semibold shadow-lg active:scale-95 transition select-none"
-              >
-                {isListening ? "Listening..." : "HOLD TO SPEAK"}
-              </button>
-            )}
-            <div className="w-64 h-20 rounded-lg bg-background/30 border border-primary/20 backdrop-blur-sm overflow-hidden">
-              <WaveformVisualizer isActive={isListening || isSpeaking} type={isSpeaking ? "speaking" : "listening"} />
+      <main className="workspace">
+        <header className="workspace-header">
+          <div className="workspace-identity">
+            <button
+              type="button"
+              className="icon-control mobile-menu-button"
+              onClick={() => setIsHistoryOpen(true)}
+              aria-label="Open conversation navigation"
+            >
+              <Menu size={19} aria-hidden="true" />
+            </button>
+            <span className="brand-mark workspace-brand-mark" aria-hidden="true">
+              <Sparkles size={18} />
+            </span>
+            <div className="workspace-brand-copy">
+              <strong>myVishva</strong>
+              <span>AI assistant</span>
             </div>
           </div>
 
-          {/* Right panel - Transcript */}
-          <div className="order-3 w-full lg:w-auto">
-            <HUDPanel title="Communication Log" position="right">
-              <TranscriptDisplay messages={messages} currentTranscript={isListening ? interimTranscript || transcript : undefined} />
-            </HUDPanel>
+          <div className="workspace-actions">
+            <StatusIndicator
+              connectionState={connectionState}
+              isListening={isListening}
+              isThinking={isProcessing}
+              isSpeaking={isSpeaking}
+            />
+            <time className="workspace-time">
+              <span>{currentTime}</span>
+              <span>{currentDate}</span>
+            </time>
+            <button
+              type="button"
+              className="icon-control workspace-new-chat"
+              onClick={createNewConversation}
+              aria-label="Start a new chat"
+              title="Start a new chat"
+            >
+              <Plus size={19} aria-hidden="true" />
+            </button>
+            {user ? (
+              <button
+                type="button"
+                className="icon-control workspace-auth-action"
+                onClick={handleSignOut}
+                aria-label="Sign out"
+                title="Sign out"
+              >
+                <LogOut size={18} aria-hidden="true" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="workspace-text-action workspace-auth-action"
+                onClick={() => navigate("/auth")}
+                aria-label="Sign in for conversation history"
+              >
+                <LogIn size={17} aria-hidden="true" />
+                <span>Sign in</span>
+              </button>
+            )}
           </div>
+        </header>
+
+        {sessionError && !user && (
+          <div className="session-notice" role="status">
+            {sessionError}
+          </div>
+        )}
+
+        <div className="workspace-content">
+          <AnimatePresence mode="sync" initial={false}>
+            {hasStartedConversation ? (
+              <motion.section
+                key="conversation"
+                className="conversation-stage"
+                initial={{ opacity: 0, y: shouldReduceMotion ? 0 : 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: shouldReduceMotion ? 0 : -5 }}
+                transition={transition}
+                aria-label="Current conversation"
+              >
+                <header className="conversation-header">
+                  <VishvaCoreOrb
+                    state={orbState}
+                    audioAnalyser={audioAnalyser}
+                    size="compact"
+                    onClick={handleOrbClick}
+                  />
+                  <div className="conversation-header-copy">
+                    <h1 className="conversation-header-title">
+                      {currentConversation?.title || "New conversation"}
+                    </h1>
+                    <p className="conversation-header-state" role="status" aria-live="polite">
+                      {speechError
+                        ? "Voice input unavailable"
+                        : isListening
+                        ? "Listening"
+                        : isProcessing
+                          ? "Vishva is thinking"
+                          : isSpeaking
+                            ? "Speaking"
+                            : "Ready when you are"}
+                    </p>
+                  </div>
+                  <WaveformVisualizer
+                    isActive={isListening || isSpeaking}
+                    type={isSpeaking ? "speaking" : "listening"}
+                  />
+                </header>
+                <TranscriptDisplay
+                  messages={messages}
+                  currentTranscript={isListening ? interimTranscript || transcript : undefined}
+                  isThinking={isProcessing}
+                  isLoadingMessages={isLoadingSelectedConversation}
+                  hasMoreMessages={Boolean(user && currentConversation?.hasMoreMessages)}
+                  isLoadingOlderMessages={isLoadingOlderMessages}
+                  onLoadOlderMessages={loadOlderMessages}
+                />
+              </motion.section>
+            ) : (
+              <motion.section
+                key="welcome"
+                className="welcome-stage"
+                initial={{ opacity: 0, y: shouldReduceMotion ? 0 : 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: shouldReduceMotion ? 0 : -5 }}
+                transition={transition}
+                aria-label="Start a conversation"
+              >
+                <div className="welcome-orb-wrap">
+                  <VishvaCoreOrb
+                    state={orbState}
+                    audioAnalyser={audioAnalyser}
+                    onClick={handleOrbClick}
+                  />
+                  <div className="orb-caption" role="status" aria-live="polite">
+                    {speechError
+                      ? "Voice input unavailable"
+                      : isListening
+                      ? "Listening"
+                      : isProcessing
+                        ? "Thinking"
+                        : isSpeaking
+                          ? "Speaking"
+                          : speechSupported
+                            ? "Speak or type to begin"
+                            : "Type a message to begin"}
+                  </div>
+                  <WaveformVisualizer
+                    isActive={isListening || isSpeaking}
+                    type={isSpeaking ? "speaking" : "listening"}
+                  />
+                </div>
+                <div className="welcome-copy">
+                  <h1 className="welcome-title">{greeting}</h1>
+                  <p className="welcome-subtitle">
+                    Ask a question, explore an idea, or talk it through.
+                  </p>
+                </div>
+                <div className="welcome-composer">
+                  <ChatComposer
+                    ref={composerRef}
+                    isProcessing={isProcessing}
+                    isListening={isListening}
+                    isMobile={isMobile}
+                    speechSupported={speechSupported}
+                    onSend={handleUserInput}
+                    onVoice={handleOrbClick}
+                    onPointerDown={handleHoldToSpeakStart}
+                    onPointerUp={handleHoldToSpeakEnd}
+                    onPointerCancel={handleHoldToSpeakEnd}
+                  />
+                </div>
+                <div className="suggested-prompts" aria-label="Suggested prompts">
+                  {prompts.map((item) => (
+                    <button
+                      key={item.label}
+                      type="button"
+                      className="prompt-chip"
+                      onClick={() => composerRef.current?.applyPrompt(item.prompt)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </motion.section>
+            )}
+          </AnimatePresence>
+
+          {hasStartedConversation && (
+            <div className="chat-composer">
+              <ChatComposer
+                isProcessing={isProcessing}
+                isListening={isListening}
+                isMobile={isMobile}
+                speechSupported={speechSupported}
+                onSend={handleUserInput}
+                onVoice={handleOrbClick}
+                onPointerDown={handleHoldToSpeakStart}
+                onPointerUp={handleHoldToSpeakEnd}
+                onPointerCancel={handleHoldToSpeakEnd}
+              />
+            </div>
+          )}
         </div>
 
-        {/* Instructions */}
-        <motion.div className="absolute bottom-4 md:bottom-8 left-1/2 -translate-x-1/2 text-center w-full px-4" initial={{
-        opacity: 0,
-        y: 20
-      }} animate={{
-        opacity: 1,
-        y: 0
-      }} transition={{
-        delay: 0.6
-      }}>
-          
-          <p className="font-rajdhani text-xs text-muted-foreground md:hidden">
-            {!speechSupported ? <span className="text-destructive">Speech not supported</span> : isListening ? <span className="text-primary animate-pulse">Listening...</span> : isProcessing ? <span className="text-primary/70">Processing...</span> : isMobile ? <span>Hold to speak</span> : <span>Tap the orb to speak</span>}
-          </p>
-          
-        </motion.div>
-      </div>
-
-      {/* Info button - bottom right */}
-      <motion.button
-        className="fixed bottom-4 right-4 md:bottom-8 md:right-8 z-20 w-10 h-10 rounded-full bg-primary/10 hover:bg-primary/20 border border-primary/30 flex items-center justify-center text-primary transition-all hover:scale-110"
-        onClick={() => setIsCreditsOpen(true)}
-        initial={{ opacity: 0, scale: 0 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ delay: 0.8 }}
-        title="Credits"
-      >
-        <Info className="h-5 w-5" />
-      </motion.button>
-
-      {/* Credits Modal */}
-      <CreditsModal isOpen={isCreditsOpen} onClose={() => setIsCreditsOpen(false)} />
-
-      {/* Ambient glow */}
-      <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] pointer-events-none">
-        <div className="absolute inset-0 rounded-full opacity-20" style={{
-        background: "radial-gradient(circle, hsl(187 100% 50% / 0.3) 0%, transparent 50%)"
-      }} />
-      </div>
-    </div>;
+        <CreditsModal isOpen={isCreditsOpen} onClose={closeCredits} />
+      </main>
+    </div>
+  );
 };
 export default Index;

@@ -15,8 +15,8 @@ const setAuthCookie = (res: Response, token: string) => {
   const isProd = process.env.NODE_ENV === "production";
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
-  secure: true,          
-  sameSite: "none",    
+    secure: isProd,
+    sameSite: isProd ? "none" : "lax",
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
   });
 };
@@ -114,8 +114,8 @@ router.post(
   async (req: Request, res: Response): Promise<Response | void> => {
     res.clearCookie(COOKIE_NAME, {
       httpOnly: true,
-      sameSite: "none",
-      secure: true,
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      secure: process.env.NODE_ENV === "production",
     });
     return res.json({ success: true });
   }
@@ -158,4 +158,3 @@ router.get(
 );
 
 export default router;
-

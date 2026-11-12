@@ -1,4 +1,4 @@
-// Mock AI responses for the Jarvis assistant
+// Mock AI responses for the Vishva assistant
 // In a real app, this would call an actual AI API
 
 const responses: Record<string, string[]> = {

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
+    "test": "node --experimental-strip-types --test tests/persistence.test.mjs",
     "start": "node dist/server.js"
   },
   "dependencies": {
@@ -29,4 +30,3 @@
     "typescript": "^5.8.3"
   }
 }
-
