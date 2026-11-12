@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-
+import { isMobileBrowser } from "@/lib/isMobile";
 interface SpeechRecognitionEvent {
   resultIndex: number;
   results: SpeechRecognitionResultList;
@@ -68,7 +68,8 @@ const useSpeechRecognition = (): UseSpeechRecognitionReturn => {
     const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     const recognition: ISpeechRecognition = new SpeechRecognitionClass();
 
-    recognition.continuous = true;
+    const isMobile = isMobileBrowser();
+    recognition.continuous = !isMobile;
     recognition.interimResults = true;
     recognition.lang = "en-US";
 

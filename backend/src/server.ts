@@ -17,8 +17,9 @@ const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "http://localhost:5173";
 const allowedOrigins = [
   "http://localhost:8080",
   "http://localhost:5173",
+  "https://myjarviss.netlify.app",
   process.env.CLIENT_ORIGIN
-];
+].filter(Boolean);
 
 app.use(
   cors({
